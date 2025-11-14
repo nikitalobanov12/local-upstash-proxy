@@ -10,3 +10,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV}
       PORT: ${PORT}
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
