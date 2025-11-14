@@ -1,14 +1,21 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
-	"log"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 )
+
+type Response struct {
+	Result interface{} `json:"result"`
+	Error  string      `json:"error,omitempty"`
+}
 
 func (s *Server) RegisterRoutes() http.Handler {
 	r := chi.NewRouter()
@@ -22,19 +29,60 @@ func (s *Server) RegisterRoutes() http.Handler {
 		MaxAge:           300,
 	}))
 
-	r.Get("/", s.HelloWorldHandler)
+	r.HandleFunc("/*", s.handleRedisProxy)
 
 	return r
 }
 
-func (s *Server) HelloWorldHandler(w http.ResponseWriter, r *http.Request) {
-	resp := make(map[string]string)
-	resp["message"] = "Hello World"
+func (s *Server) handleRedisProxy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 
-	jsonResp, err := json.Marshal(resp)
-	if err != nil {
-		log.Fatalf("error handling JSON marshal. Err: %v", err)
+	path := strings.Trim(r.URL.Path, "/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) == 0 || parts[0] == "" {
+		s.sendError(w, "No command specified", http.StatusBadRequest)
+		return
 	}
 
-	_, _ = w.Write(jsonResp)
+	cmd := strings.ToUpper(parts[0])
+	args := parts[1:]
+
+	if r.Body != nil {
+		body, _ := io.ReadAll(r.Body)
+		if len(body) > 0 {
+			var bodyArgs []string
+			if err := json.Unmarshal(body, &bodyArgs); err == nil {
+				args = append(args, bodyArgs...)
+			}
+		}
+	}
+
+	ctx := context.Background()
+	result, err := s.executeCommand(ctx, cmd, args)
+	if err != nil {
+		s.sendError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.sendSuccess(w, result)
+}
+
+func (s *Server) executeCommand(ctx context.Context, cmd string, args []string) (interface{}, error) {
+	redisArgs := make([]interface{}, len(args)+1)
+	redisArgs[0] = cmd
+	for i, arg := range args {
+		redisArgs[i+1] = arg
+	}
+	result := s.rdb.Do(ctx, redisArgs...)
+	return result.Result()
+}
+
+func (s *Server) sendSuccess(w http.ResponseWriter, result interface{}) {
+	json.NewEncoder(w).Encode(Response{Result: result})
+}
+
+func (s *Server) sendError(w http.ResponseWriter, msg string, status int) {
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(Response{Error: msg})
 }
