@@ -28,6 +28,7 @@ func NewServer() *http.Server {
 	if redisURL == "" {
 		redisURL = "localhost:6379"
 	}
+	fmt.Println("connection to redis at: ", redisURL)
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr: redisURL,
